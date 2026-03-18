@@ -32,6 +32,7 @@ import { PermissionNext } from "@/permission"
 import { Global } from "@/global"
 import type { LanguageModelV2Usage } from "@ai-sdk/provider"
 import { iife } from "@/util/iife"
+import { ResourceRef } from "@/resource-ref/resource-ref"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -669,6 +670,7 @@ export namespace Session {
         await remove(child.id)
       }
       await unshare(sessionID).catch(() => {})
+      ResourceRef.clear(sessionID)
       // CASCADE delete handles messages and parts automatically
       Database.use((db) => {
         db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run()

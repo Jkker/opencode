@@ -4,6 +4,7 @@ import type { Agent } from "../agent/agent"
 import type { PermissionNext } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
 import { Truncate } from "./truncate"
+import { ResourceRef } from "../resource-ref/resource-ref"
 
 export namespace Tool {
   interface Metadata {
@@ -27,6 +28,7 @@ export namespace Tool {
   }
   export interface Info<Parameters extends z.ZodType = z.ZodType, M extends Metadata = Metadata> {
     id: string
+    sensitive?: boolean
     init: (ctx?: InitContext) => Promise<{
       description: string
       parameters: Parameters
@@ -49,15 +51,19 @@ export namespace Tool {
   export function define<Parameters extends z.ZodType, Result extends Metadata>(
     id: string,
     init: Info<Parameters, Result>["init"] | Awaited<ReturnType<Info<Parameters, Result>["init"]>>,
+    opts?: { sensitive?: boolean },
   ): Info<Parameters, Result> {
     return {
       id,
+      sensitive: opts?.sensitive,
       init: async (initCtx) => {
         const toolInfo = init instanceof Function ? await init(initCtx) : init
         const execute = toolInfo.execute
         toolInfo.execute = async (args, ctx) => {
+          // resolve rsrf:// URIs in args before validation
+          const resolved = ResourceRef.resolveInArgs(args, ctx.sessionID)
           try {
-            toolInfo.parameters.parse(args)
+            toolInfo.parameters.parse(resolved)
           } catch (error) {
             if (error instanceof z.ZodError && toolInfo.formatValidationError) {
               throw new Error(toolInfo.formatValidationError(error), { cause: error })
@@ -67,7 +73,34 @@ export namespace Tool {
               { cause: error },
             )
           }
-          const result = await execute(args, ctx)
+          const result = await execute(resolved as z.infer<Parameters>, ctx)
+
+          // classify output — sensitive always takes precedence
+          const classification = ResourceRef.classify(result.output, {
+            sensitive: opts?.sensitive || result.metadata.sensitive,
+          })
+
+          // sensitive outputs: store in memory only, return redacted placeholder
+          if (classification === "sensitive") {
+            const entry = ResourceRef.put({
+              tool: id,
+              sessionID: ctx.sessionID,
+              data: result.output,
+              classification: "sensitive",
+              key: result.metadata.resourceKey,
+              metadata: result.metadata.resourceMeta,
+            })
+            return {
+              ...result,
+              output: ResourceRef.redact(entry),
+              metadata: {
+                ...result.metadata,
+                resourceRef: entry.uri,
+                sensitive: true,
+              },
+            }
+          }
+
           // skip truncation for tools that handle it themselves
           if (result.metadata.truncated !== undefined) {
             return result
