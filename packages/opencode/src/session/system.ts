@@ -69,4 +69,23 @@ export namespace SystemPrompt {
       Skill.fmt(list, { verbose: true }),
     ].join("\n")
   }
+
+  export function resourceRef() {
+    return [
+      "<resource_refs>",
+      "Some tool outputs may be stored as resource references (URIs starting with rsrf://).",
+      "Resource refs are used for sensitive or large outputs that should not be read into the context window.",
+      "",
+      "RULES:",
+      "- When you see a rsrf:// URI in a tool result, you can pass it directly as an argument to another tool.",
+      "- The URI will be automatically resolved to the actual data when the receiving tool executes.",
+      "- NEVER attempt to read, display, or log the contents of a sensitive resource ref.",
+      "- Sensitive resource refs are redacted from the context window for security.",
+      "- Pass rsrf:// URIs as-is in tool arguments where the actual data is needed.",
+      "",
+      "Example: if a tool returns rsrf://password-manager/db-pass, pass that URI string directly",
+      "to another tool's argument that needs the password value.",
+      "</resource_refs>",
+    ].join("\n")
+  }
 }

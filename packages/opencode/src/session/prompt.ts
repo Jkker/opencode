@@ -48,6 +48,7 @@ import { iife } from "@/util/iife"
 import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
+import { ResourceRef } from "@/resource-ref/resource-ref"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -657,6 +658,7 @@ export namespace SessionPrompt {
         ...(await SystemPrompt.environment(model)),
         ...(skills ? [skills] : []),
         ...(await InstructionPrompt.system()),
+        SystemPrompt.resourceRef(),
       ]
       const format = lastUser.format ?? { type: "text" }
       if (format.type === "json_schema") {
@@ -845,6 +847,8 @@ export namespace SessionPrompt {
       // Wrap execute to add plugin hooks and format output
       item.execute = async (args, opts) => {
         const ctx = context(args, opts)
+        // resolve rsrf:// URIs in MCP tool args
+        const resolved = ResourceRef.resolveInArgs(args as Record<string, unknown>, ctx.sessionID)
 
         await Plugin.trigger(
           "tool.execute.before",
@@ -854,7 +858,7 @@ export namespace SessionPrompt {
             callID: opts.toolCallId,
           },
           {
-            args,
+            args: resolved,
           },
         )
 
@@ -865,7 +869,7 @@ export namespace SessionPrompt {
           always: ["*"],
         })
 
-        const result = await execute(args, opts)
+        const result = await execute(resolved, opts)
 
         await Plugin.trigger(
           "tool.execute.after",
