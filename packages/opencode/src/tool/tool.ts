@@ -75,12 +75,12 @@ export namespace Tool {
           }
           const result = await execute(resolved as z.infer<Parameters>, ctx)
 
-          // classify output
+          // classify output — sensitive always takes precedence
           const classification = ResourceRef.classify(result.output, {
             sensitive: opts?.sensitive || result.metadata.sensitive,
           })
 
-          // sensitive outputs: store in memory, return redacted placeholder
+          // sensitive outputs: store in memory only, return redacted placeholder
           if (classification === "sensitive") {
             const entry = ResourceRef.put({
               tool: id,
@@ -88,6 +88,7 @@ export namespace Tool {
               data: result.output,
               classification: "sensitive",
               key: result.metadata.resourceKey,
+              metadata: result.metadata.resourceMeta,
             })
             return {
               ...result,

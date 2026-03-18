@@ -40,6 +40,18 @@ describe("ResourceRef", () => {
       expect(entry.key).toBe("db-pass")
     })
 
+    test("stores metadata on entries", () => {
+      const entry = ResourceRef.put({
+        tool: "vault",
+        sessionID: sess1,
+        data: "token-value",
+        classification: "sensitive",
+        key: "api-token",
+        metadata: { type: "bearer", scope: "admin" },
+      })
+      expect(entry.metadata).toEqual({ type: "bearer", scope: "admin" })
+    })
+
     test("denies cross-session access", () => {
       const entry = ResourceRef.put({
         tool: "bash",
@@ -153,6 +165,11 @@ describe("ResourceRef", () => {
     test("returns undefined for malformed rsrf URIs", () => {
       expect(ResourceRef.parse("rsrf://nokey")).toBeUndefined()
     })
+
+    test("returns undefined for empty tool or key", () => {
+      expect(ResourceRef.parse("rsrf:///key")).toBeUndefined()
+      expect(ResourceRef.parse("rsrf://tool/")).toBeUndefined()
+    })
   })
 
   describe("isRef", () => {
@@ -177,10 +194,7 @@ describe("ResourceRef", () => {
         key: "secret",
       })
 
-      const result = ResourceRef.resolveInArgs(
-        { password: entry.uri, username: "admin" },
-        sess1,
-      )
+      const result = ResourceRef.resolveInArgs({ password: entry.uri, username: "admin" }, sess1)
       expect(result.password).toBe("actual-secret-value")
       expect(result.username).toBe("admin")
     })
@@ -194,10 +208,7 @@ describe("ResourceRef", () => {
         key: "nested",
       })
 
-      const result = ResourceRef.resolveInArgs(
-        { config: { auth: { token: entry.uri } } },
-        sess1,
-      )
+      const result = ResourceRef.resolveInArgs({ config: { auth: { token: entry.uri } } }, sess1)
       expect((result.config as any).auth.token).toBe("nested-secret")
     })
 
@@ -210,30 +221,27 @@ describe("ResourceRef", () => {
         key: "arr",
       })
 
-      const result = ResourceRef.resolveInArgs(
-        { items: [entry.uri, "normal-value"] },
-        sess1,
-      )
+      const result = ResourceRef.resolveInArgs({ items: [entry.uri, "normal-value"] }, sess1)
       expect((result.items as string[])[0]).toBe("array-secret")
       expect((result.items as string[])[1]).toBe("normal-value")
     })
 
     test("leaves unresolvable refs as-is", () => {
-      const result = ResourceRef.resolveInArgs(
-        { key: "rsrf://nonexistent/key" },
-        sess1,
-      )
+      const result = ResourceRef.resolveInArgs({ key: "rsrf://nonexistent/key" }, sess1)
       expect(result.key).toBe("rsrf://nonexistent/key")
     })
 
     test("preserves non-string values", () => {
-      const result = ResourceRef.resolveInArgs(
-        { count: 42, flag: true, empty: null },
-        sess1,
-      )
+      const result = ResourceRef.resolveInArgs({ count: 42, flag: true, empty: null }, sess1)
       expect(result.count).toBe(42)
       expect(result.flag).toBe(true)
       expect(result.empty).toBeNull()
+    })
+
+    test("returns original args when no refs present", () => {
+      const args = { command: "ls -la", timeout: 30 }
+      const result = ResourceRef.resolveInArgs(args, sess1)
+      expect(result).toBe(args) // same reference — no copy made
     })
   })
 
@@ -242,18 +250,23 @@ describe("ResourceRef", () => {
       expect(ResourceRef.classify("data", { sensitive: true })).toBe("sensitive")
     })
 
-    test("classifies as oversize when exceeding threshold", () => {
+    test("classifies as oversize using default threshold", () => {
+      const data = "x".repeat(ResourceRef.OVERSIZE_BYTES + 1)
+      expect(ResourceRef.classify(data, {})).toBe("oversize")
+    })
+
+    test("classifies as oversize using custom threshold", () => {
       const data = "x".repeat(1000)
       expect(ResourceRef.classify(data, { oversizeBytes: 500 })).toBe("oversize")
     })
 
-    test("classifies as normal by default", () => {
+    test("classifies as normal when under threshold", () => {
       expect(ResourceRef.classify("data", {})).toBe("normal")
     })
 
     test("sensitive takes precedence over oversize", () => {
-      const data = "x".repeat(1000)
-      expect(ResourceRef.classify(data, { sensitive: true, oversizeBytes: 500 })).toBe("sensitive")
+      const data = "x".repeat(ResourceRef.OVERSIZE_BYTES + 1)
+      expect(ResourceRef.classify(data, { sensitive: true })).toBe("sensitive")
     })
   })
 
@@ -268,18 +281,46 @@ describe("ResourceRef", () => {
       })
 
       const redacted = ResourceRef.redact(entry)
-      expect(redacted).toContain("SENSITIVE OUTPUT STORED AS RESOURCE REF")
+      expect(redacted).toContain("SENSITIVE OUTPUT")
+      expect(redacted).toContain("REDACTED")
       expect(redacted).toContain(entry.uri)
       expect(redacted).toContain("vault")
       expect(redacted).toContain("2 lines")
       expect(redacted).not.toContain("my-secret-password")
       expect(redacted).not.toContain("second-line")
     })
+
+    test("handles single-line secret correctly", () => {
+      const entry = ResourceRef.put({
+        tool: "bash",
+        sessionID: sess1,
+        data: "short",
+        classification: "sensitive",
+        key: "k",
+      })
+      const redacted = ResourceRef.redact(entry)
+      expect(redacted).toContain("1 line")
+      expect(redacted).not.toContain("1 lines")
+    })
+
+    test("includes entry metadata in redacted output", () => {
+      const entry = ResourceRef.put({
+        tool: "vault",
+        sessionID: sess1,
+        data: "secret",
+        classification: "sensitive",
+        key: "tok",
+        metadata: { type: "bearer" },
+      })
+      const redacted = ResourceRef.redact(entry)
+      expect(redacted).toContain("type=bearer")
+    })
   })
 
   describe("oversizePreview", () => {
-    test("includes preview and URI", () => {
-      const data = "line1\nline2\nline3\n" + "x".repeat(1000)
+    test("includes line-based preview and URI", () => {
+      const lines = Array.from({ length: 100 }, (_, i) => `line ${i}: ${"x".repeat(50)}`)
+      const data = lines.join("\n")
       const entry = ResourceRef.put({
         tool: "duckdb",
         sessionID: sess1,
@@ -289,10 +330,12 @@ describe("ResourceRef", () => {
       })
 
       const preview = ResourceRef.oversizePreview(entry)
-      expect(preview).toContain("OVERSIZE OUTPUT STORED AS RESOURCE REF")
+      expect(preview).toContain("OVERSIZE OUTPUT")
       expect(preview).toContain(entry.uri)
-      expect(preview).toContain("line1")
+      expect(preview).toContain("line 0:")
       expect(preview).toContain("duckdb")
+      expect(preview).toContain("100 lines")
+      expect(preview).toContain("more lines")
     })
 
     test("uses custom preview when provided", () => {
@@ -307,6 +350,45 @@ describe("ResourceRef", () => {
 
       const text = ResourceRef.oversizePreview(entry)
       expect(text).toContain("Custom preview text")
+    })
+
+    test("includes entry metadata in preview", () => {
+      const entry = ResourceRef.put({
+        tool: "query",
+        sessionID: sess1,
+        data: "x".repeat(1000),
+        classification: "oversize",
+        key: "m",
+        metadata: { rows: 500 },
+      })
+      const text = ResourceRef.oversizePreview(entry)
+      expect(text).toContain("rows=500")
+    })
+
+    test("shows full content when data fits preview limits", () => {
+      const entry = ResourceRef.put({
+        tool: "bash",
+        sessionID: sess1,
+        data: "line1\nline2\nline3",
+        classification: "oversize",
+        key: "small",
+      })
+      const text = ResourceRef.oversizePreview(entry)
+      expect(text).toContain("line1")
+      expect(text).toContain("line3")
+      expect(text).not.toContain("more lines")
+    })
+  })
+
+  describe("totalBytes", () => {
+    test("tracks total memory footprint", () => {
+      ResourceRef.put({ tool: "a", sessionID: sess1, data: "hello", classification: "normal" })
+      ResourceRef.put({ tool: "b", sessionID: sess1, data: "world!", classification: "normal" })
+      expect(ResourceRef.totalBytes()).toBe(Buffer.byteLength("hello") + Buffer.byteLength("world!"))
+    })
+
+    test("returns 0 when empty", () => {
+      expect(ResourceRef.totalBytes()).toBe(0)
     })
   })
 
@@ -329,6 +411,12 @@ describe("ResourceRef", () => {
 
       const resolved = ResourceRef.resolve(entry.uri, sess1)
       expect(resolved!.data).toBe("new-data")
+    })
+  })
+
+  describe("OVERSIZE_BYTES constant", () => {
+    test("is exported and matches truncation threshold", () => {
+      expect(ResourceRef.OVERSIZE_BYTES).toBe(50 * 1024)
     })
   })
 })

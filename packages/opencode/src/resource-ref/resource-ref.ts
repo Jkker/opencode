@@ -9,6 +9,9 @@ export namespace ResourceRef {
   const DEFAULT_TTL = 30 * 60 * 1000 // 30 minutes
   const MAX_ENTRIES = 1000
   const CLEANUP_INTERVAL = 5 * 60 * 1000 // 5 minutes
+  export const OVERSIZE_BYTES = 50 * 1024 // 50KB — matches truncation threshold
+  const PREVIEW_LINES = 20
+  const PREVIEW_BYTES = 1024
 
   export type Classification = "sensitive" | "oversize" | "normal"
 
@@ -20,6 +23,7 @@ export namespace ResourceRef {
     data: string
     classification: Classification
     preview?: string
+    metadata?: Record<string, unknown>
     created: number
     ttl: number
     bytes: number
@@ -33,6 +37,7 @@ export namespace ResourceRef {
     key?: string
     ttl?: number
     preview?: string
+    metadata?: Record<string, unknown>
   }
 
   export interface ResolveResult {
@@ -72,6 +77,7 @@ export namespace ResourceRef {
       data: input.data,
       classification: input.classification,
       preview: input.preview,
+      metadata: input.metadata,
       created: Date.now(),
       ttl: input.ttl ?? DEFAULT_TTL,
       bytes,
@@ -80,11 +86,12 @@ export namespace ResourceRef {
     store.set(ref, entry)
     ensureCleanup()
 
-    log.info("stored", {
-      uri: ref,
-      classification: input.classification,
-      bytes,
-    })
+    // only log non-sensitive metadata — never log URIs for sensitive data
+    if (input.classification !== "sensitive") {
+      log.info("stored", { uri: ref, classification: input.classification, bytes })
+    } else {
+      log.info("stored sensitive ref", { tool: input.tool, bytes })
+    }
 
     return entry
   }
@@ -93,7 +100,7 @@ export namespace ResourceRef {
     const entry = store.get(ref)
     if (!entry) return undefined
     if (entry.sessionID !== sessionID) {
-      log.warn("cross-session access denied", { uri: ref, requested: sessionID, owner: entry.sessionID })
+      log.warn("cross-session access denied", { requested: sessionID })
       return undefined
     }
     if (isExpired(entry)) {
@@ -154,6 +161,15 @@ export namespace ResourceRef {
     return store.size
   }
 
+  /** Total bytes held across all entries (approximate memory footprint). */
+  export function totalBytes(): number {
+    let total = 0
+    for (const entry of store.values()) {
+      total += entry.bytes
+    }
+    return total
+  }
+
   /**
    * Parse a rsrf:// URI into its components.
    * Returns undefined if the string is not a valid resource ref URI.
@@ -163,7 +179,10 @@ export namespace ResourceRef {
     const rest = ref.slice(SCHEME.length + 3)
     const idx = rest.indexOf("/")
     if (idx < 0) return undefined
-    return { tool: rest.slice(0, idx), key: rest.slice(idx + 1) }
+    const tool = rest.slice(0, idx)
+    const key = rest.slice(idx + 1)
+    if (!tool || !key) return undefined
+    return { tool, key }
   }
 
   /**
@@ -174,42 +193,53 @@ export namespace ResourceRef {
   }
 
   /**
-   * Resolve all rsrf:// URIs found in a string argument, replacing them with their actual data.
-   * Only resolves refs belonging to the given session.
+   * Resolve all rsrf:// URIs found in tool arguments, replacing them with actual data.
+   * Only resolves refs belonging to the given session. Returns the args unchanged
+   * if no refs are present (avoids unnecessary copying).
    */
   export function resolveInArgs(args: Record<string, unknown>, sessionID: SessionID): Record<string, unknown> {
+    let changed = false
     const result: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(args)) {
-      result[k] = resolveValue(v, sessionID)
+      const resolved = resolveValue(v, sessionID)
+      if (resolved !== v) changed = true
+      result[k] = resolved
     }
-    return result
+    return changed ? result : args
   }
 
   function resolveValue(value: unknown, sessionID: SessionID): unknown {
     if (typeof value === "string") {
-      if (isRef(value)) {
-        const resolved = resolve(value, sessionID)
-        if (resolved) return resolved.data
-      }
-      return value
+      if (!isRef(value)) return value
+      const resolved = resolve(value, sessionID)
+      return resolved ? resolved.data : value
     }
     if (Array.isArray(value)) {
-      return value.map((v) => resolveValue(v, sessionID))
+      let changed = false
+      const out = value.map((v) => {
+        const r = resolveValue(v, sessionID)
+        if (r !== v) changed = true
+        return r
+      })
+      return changed ? out : value
     }
     if (typeof value === "object" && value !== null) {
+      let changed = false
       const out: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(value)) {
-        out[k] = resolveValue(v, sessionID)
+        const r = resolveValue(v, sessionID)
+        if (r !== v) changed = true
+        out[k] = r
       }
-      return out
+      return changed ? out : value
     }
     return value
   }
 
   /**
-   * Classify a tool output based on its content.
-   * - `sensitive`: if the tool was configured as sensitive before invocation
-   * - `oversize`: if the output exceeds the oversize threshold
+   * Classify a tool output.
+   * - `sensitive`: if the tool or output was flagged as sensitive (always takes precedence)
+   * - `oversize`: if the output exceeds the byte threshold
    * - `normal`: otherwise
    */
   export function classify(
@@ -218,46 +248,77 @@ export namespace ResourceRef {
   ): Classification {
     if (opts.sensitive) return "sensitive"
     const bytes = Buffer.byteLength(output, "utf-8")
-    if (opts.oversizeBytes && bytes > opts.oversizeBytes) return "oversize"
+    const threshold = opts.oversizeBytes ?? OVERSIZE_BYTES
+    if (bytes > threshold) return "oversize"
     return "normal"
   }
 
   /**
    * Generate a redacted placeholder for sensitive output.
-   * The placeholder preserves structural hints (line count, byte size)
-   * while ensuring no actual data is exposed.
+   * Preserves structural hints (line count, byte size) while ensuring
+   * no actual data is exposed. Handles edge cases like empty or very
+   * short secrets by keeping the placeholder informative.
    */
   export function redact(entry: Entry): string {
     const lines = entry.data.split("\n").length
-    return [
-      `[SENSITIVE OUTPUT STORED AS RESOURCE REF]`,
+    const parts = [
+      `[SENSITIVE OUTPUT — REDACTED]`,
       `URI: ${entry.uri}`,
       `Tool: ${entry.tool}`,
-      `Size: ${entry.bytes} bytes, ${lines} lines`,
+      `Size: ${entry.bytes} bytes, ${lines} line${lines === 1 ? "" : "s"}`,
+    ]
+    if (entry.metadata) {
+      const safe = Object.entries(entry.metadata)
+        .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+        .map(([k, v]) => `${k}=${v}`)
+      if (safe.length) parts.push(`Metadata: ${safe.join(", ")}`)
+    }
+    parts.push(
       ``,
       `This output contains sensitive data and has been redacted from the context window.`,
-      `Pass the URI (${entry.uri}) directly to other tools that need this data.`,
-      `DO NOT attempt to read, log, or display the contents of this resource.`,
-    ].join("\n")
+      `To use this data, pass the URI directly as a tool argument: ${entry.uri}`,
+      `Do NOT attempt to read, log, or display the contents of this resource.`,
+    )
+    return parts.join("\n")
   }
 
   /**
-   * Generate an oversize preview placeholder.
+   * Generate a preview placeholder for oversize output.
+   * Uses line-based truncation for readable previews rather than
+   * arbitrary character slicing.
    */
   export function oversizePreview(entry: Entry): string {
-    const preview = entry.preview || entry.data.slice(0, 500)
-    const lines = entry.data.split("\n").length
-    return [
-      `[OVERSIZE OUTPUT STORED AS RESOURCE REF]`,
+    const allLines = entry.data.split("\n")
+    let preview = entry.preview
+    if (!preview) {
+      const selected: string[] = []
+      let bytes = 0
+      for (const line of allLines) {
+        if (selected.length >= PREVIEW_LINES) break
+        const size = Buffer.byteLength(line, "utf-8")
+        if (bytes + size > PREVIEW_BYTES && selected.length > 0) break
+        selected.push(line)
+        bytes += size
+      }
+      preview = selected.join("\n")
+      if (selected.length < allLines.length) {
+        preview += `\n... (${allLines.length - selected.length} more lines)`
+      }
+    }
+    const parts = [
+      `[OVERSIZE OUTPUT — STORED AS RESOURCE REF]`,
       `URI: ${entry.uri}`,
       `Tool: ${entry.tool}`,
-      `Size: ${entry.bytes} bytes, ${lines} lines`,
-      ``,
-      `Preview:`,
-      preview,
-      ``,
-      `Pass the URI (${entry.uri}) to other tools that need the full data.`,
-    ].join("\n")
+      `Size: ${entry.bytes} bytes, ${allLines.length} line${allLines.length === 1 ? "" : "s"}`,
+    ]
+    if (entry.metadata) {
+      const safe = Object.entries(entry.metadata)
+        .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+        .map(([k, v]) => `${k}=${v}`)
+      if (safe.length) parts.push(`Metadata: ${safe.join(", ")}`)
+    }
+    parts.push(``, `Preview:`, preview, ``, `To access the full data, pass the URI to another tool: ${entry.uri}`)
+    return parts.join("\n")
   }
 
   // --- internal ---
@@ -267,7 +328,7 @@ export namespace ResourceRef {
   }
 
   function evict() {
-    // evict oldest entries first
+    // evict expired entries first, then oldest
     let oldest: Entry | undefined
     for (const entry of store.values()) {
       if (isExpired(entry)) {
