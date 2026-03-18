@@ -51,7 +51,7 @@ export namespace ResourceRef {
   }
 
   function generateKey(): string {
-    // Use a short, LLM-friendly key based on ascending ID
+    // Extract the 12-char hex timestamp portion from the ascending ID (after the "tool_" prefix)
     return Identifier.ascending("tool").slice(5, 17)
   }
 

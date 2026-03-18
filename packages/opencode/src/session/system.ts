@@ -83,8 +83,7 @@ export namespace SystemPrompt {
       "- Sensitive resource refs are redacted from the context window for security.",
       "- Pass rsrf:// URIs as-is in tool arguments where the actual data is needed.",
       "",
-      "Example: if a tool returns rsrf://password-manager/db-pass, pass that URI string directly",
-      "to another tool's argument that needs the password value.",
+      "Example: if a tool returns rsrf://password-manager/db-pass, pass that URI string directly to another tool's argument that needs the password value.",
       "</resource_refs>",
     ].join("\n")
   }

@@ -2,8 +2,8 @@ import { describe, test, expect, beforeEach } from "bun:test"
 import { ResourceRef } from "../../src/resource-ref/resource-ref"
 import { SessionID } from "../../src/session/schema"
 
-const session1 = SessionID.descending("test-session-1")
-const session2 = SessionID.descending("test-session-2")
+const sess1 = SessionID.descending("test-session-1")
+const sess2 = SessionID.descending("test-session-2")
 
 describe("ResourceRef", () => {
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe("ResourceRef", () => {
     test("stores and retrieves data", () => {
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "secret-password-123",
         classification: "sensitive",
       })
@@ -22,7 +22,7 @@ describe("ResourceRef", () => {
       expect(entry.bytes).toBe(Buffer.byteLength("secret-password-123"))
       expect(entry.classification).toBe("sensitive")
 
-      const resolved = ResourceRef.resolve(entry.uri, session1)
+      const resolved = ResourceRef.resolve(entry.uri, sess1)
       expect(resolved).toBeDefined()
       expect(resolved!.data).toBe("secret-password-123")
       expect(resolved!.classification).toBe("sensitive")
@@ -31,7 +31,7 @@ describe("ResourceRef", () => {
     test("uses custom key when provided", () => {
       const entry = ResourceRef.put({
         tool: "password-manager",
-        sessionID: session1,
+        sessionID: sess1,
         data: "s3cret",
         classification: "sensitive",
         key: "db-pass",
@@ -43,28 +43,28 @@ describe("ResourceRef", () => {
     test("denies cross-session access", () => {
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "secret",
         classification: "sensitive",
       })
-      const resolved = ResourceRef.resolve(entry.uri, session2)
+      const resolved = ResourceRef.resolve(entry.uri, sess2)
       expect(resolved).toBeUndefined()
     })
 
     test("returns undefined for non-existent ref", () => {
-      const resolved = ResourceRef.resolve("rsrf://bash/nonexistent", session1)
+      const resolved = ResourceRef.resolve("rsrf://bash/nonexistent", sess1)
       expect(resolved).toBeUndefined()
     })
 
     test("expires entries after TTL", () => {
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "temp",
         classification: "normal",
         ttl: -1, // already expired
       })
-      const resolved = ResourceRef.resolve(entry.uri, session1)
+      const resolved = ResourceRef.resolve(entry.uri, sess1)
       expect(resolved).toBeUndefined()
     })
   })
@@ -73,7 +73,7 @@ describe("ResourceRef", () => {
     test("has returns true for existing entries", () => {
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "data",
         classification: "normal",
       })
@@ -83,7 +83,7 @@ describe("ResourceRef", () => {
     test("has returns false after removal", () => {
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "data",
         classification: "normal",
       })
@@ -94,7 +94,7 @@ describe("ResourceRef", () => {
     test("has returns false for expired entries", () => {
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "data",
         classification: "normal",
         ttl: -1,
@@ -105,29 +105,29 @@ describe("ResourceRef", () => {
 
   describe("list and clear", () => {
     test("lists entries for a session", () => {
-      ResourceRef.put({ tool: "a", sessionID: session1, data: "1", classification: "normal" })
-      ResourceRef.put({ tool: "b", sessionID: session1, data: "2", classification: "sensitive" })
-      ResourceRef.put({ tool: "c", sessionID: session2, data: "3", classification: "normal" })
+      ResourceRef.put({ tool: "a", sessionID: sess1, data: "1", classification: "normal" })
+      ResourceRef.put({ tool: "b", sessionID: sess1, data: "2", classification: "sensitive" })
+      ResourceRef.put({ tool: "c", sessionID: sess2, data: "3", classification: "normal" })
 
-      const list = ResourceRef.list(session1)
+      const list = ResourceRef.list(sess1)
       expect(list.length).toBe(2)
-      expect(list.every((e) => e.sessionID === session1)).toBe(true)
+      expect(list.every((e) => e.sessionID === sess1)).toBe(true)
     })
 
     test("clears entries for a session", () => {
-      ResourceRef.put({ tool: "a", sessionID: session1, data: "1", classification: "normal" })
-      ResourceRef.put({ tool: "b", sessionID: session1, data: "2", classification: "normal" })
-      ResourceRef.put({ tool: "c", sessionID: session2, data: "3", classification: "normal" })
+      ResourceRef.put({ tool: "a", sessionID: sess1, data: "1", classification: "normal" })
+      ResourceRef.put({ tool: "b", sessionID: sess1, data: "2", classification: "normal" })
+      ResourceRef.put({ tool: "c", sessionID: sess2, data: "3", classification: "normal" })
 
-      const cleared = ResourceRef.clear(session1)
+      const cleared = ResourceRef.clear(sess1)
       expect(cleared).toBe(2)
       expect(ResourceRef.size()).toBe(1)
-      expect(ResourceRef.list(session2).length).toBe(1)
+      expect(ResourceRef.list(sess2).length).toBe(1)
     })
 
     test("clearAll removes everything", () => {
-      ResourceRef.put({ tool: "a", sessionID: session1, data: "1", classification: "normal" })
-      ResourceRef.put({ tool: "b", sessionID: session2, data: "2", classification: "normal" })
+      ResourceRef.put({ tool: "a", sessionID: sess1, data: "1", classification: "normal" })
+      ResourceRef.put({ tool: "b", sessionID: sess2, data: "2", classification: "normal" })
       ResourceRef.clearAll()
       expect(ResourceRef.size()).toBe(0)
     })
@@ -171,7 +171,7 @@ describe("ResourceRef", () => {
     test("resolves rsrf URIs in string args", () => {
       const entry = ResourceRef.put({
         tool: "vault",
-        sessionID: session1,
+        sessionID: sess1,
         data: "actual-secret-value",
         classification: "sensitive",
         key: "secret",
@@ -179,7 +179,7 @@ describe("ResourceRef", () => {
 
       const result = ResourceRef.resolveInArgs(
         { password: entry.uri, username: "admin" },
-        session1,
+        sess1,
       )
       expect(result.password).toBe("actual-secret-value")
       expect(result.username).toBe("admin")
@@ -188,7 +188,7 @@ describe("ResourceRef", () => {
     test("resolves nested rsrf URIs in objects", () => {
       const entry = ResourceRef.put({
         tool: "vault",
-        sessionID: session1,
+        sessionID: sess1,
         data: "nested-secret",
         classification: "sensitive",
         key: "nested",
@@ -196,7 +196,7 @@ describe("ResourceRef", () => {
 
       const result = ResourceRef.resolveInArgs(
         { config: { auth: { token: entry.uri } } },
-        session1,
+        sess1,
       )
       expect((result.config as any).auth.token).toBe("nested-secret")
     })
@@ -204,7 +204,7 @@ describe("ResourceRef", () => {
     test("resolves rsrf URIs in arrays", () => {
       const entry = ResourceRef.put({
         tool: "vault",
-        sessionID: session1,
+        sessionID: sess1,
         data: "array-secret",
         classification: "sensitive",
         key: "arr",
@@ -212,7 +212,7 @@ describe("ResourceRef", () => {
 
       const result = ResourceRef.resolveInArgs(
         { items: [entry.uri, "normal-value"] },
-        session1,
+        sess1,
       )
       expect((result.items as string[])[0]).toBe("array-secret")
       expect((result.items as string[])[1]).toBe("normal-value")
@@ -221,7 +221,7 @@ describe("ResourceRef", () => {
     test("leaves unresolvable refs as-is", () => {
       const result = ResourceRef.resolveInArgs(
         { key: "rsrf://nonexistent/key" },
-        session1,
+        sess1,
       )
       expect(result.key).toBe("rsrf://nonexistent/key")
     })
@@ -229,7 +229,7 @@ describe("ResourceRef", () => {
     test("preserves non-string values", () => {
       const result = ResourceRef.resolveInArgs(
         { count: 42, flag: true, empty: null },
-        session1,
+        sess1,
       )
       expect(result.count).toBe(42)
       expect(result.flag).toBe(true)
@@ -261,7 +261,7 @@ describe("ResourceRef", () => {
     test("produces redacted placeholder with metadata", () => {
       const entry = ResourceRef.put({
         tool: "vault",
-        sessionID: session1,
+        sessionID: sess1,
         data: "my-secret-password\nsecond-line",
         classification: "sensitive",
         key: "pass",
@@ -282,7 +282,7 @@ describe("ResourceRef", () => {
       const data = "line1\nline2\nline3\n" + "x".repeat(1000)
       const entry = ResourceRef.put({
         tool: "duckdb",
-        sessionID: session1,
+        sessionID: sess1,
         data,
         classification: "oversize",
         key: "results",
@@ -298,7 +298,7 @@ describe("ResourceRef", () => {
     test("uses custom preview when provided", () => {
       const entry = ResourceRef.put({
         tool: "query",
-        sessionID: session1,
+        sessionID: sess1,
         data: "x".repeat(10000),
         classification: "oversize",
         key: "big",
@@ -314,20 +314,20 @@ describe("ResourceRef", () => {
     test("overwrites existing entry with same key", () => {
       ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "old-data",
         classification: "normal",
         key: "same-key",
       })
       const entry = ResourceRef.put({
         tool: "bash",
-        sessionID: session1,
+        sessionID: sess1,
         data: "new-data",
         classification: "normal",
         key: "same-key",
       })
 
-      const resolved = ResourceRef.resolve(entry.uri, session1)
+      const resolved = ResourceRef.resolve(entry.uri, sess1)
       expect(resolved!.data).toBe("new-data")
     })
   })
