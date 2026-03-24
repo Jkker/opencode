@@ -7,7 +7,7 @@ import { Global } from "../global"
 import { Instance } from "../project/instance"
 import { Log } from "../util/log"
 import { allowOrigin } from "./origin"
-import { DatabaseSync } from "node:sqlite"
+import { Database as Sqlite } from "bun:sqlite"
 import { existsSync } from "fs"
 import fs from "fs/promises"
 import path from "path"
@@ -46,7 +46,8 @@ export namespace ServerAuth {
   interface State {
     auth?: ReturnType<typeof betterAuth>
     info: Info
-    js?: string
+    entry?: string
+    js?: Promise<string>
   }
 
   type ServerPatch = { options: BetterAuthOptions; methods: Method[] }
@@ -91,7 +92,7 @@ export namespace ServerAuth {
     const secret = raw?.secret ?? (await storedSecret())
     const file = authPath(raw?.database)
     await fs.mkdir(path.dirname(file), { recursive: true })
-    const db = new DatabaseSync(file)
+    const db = new Sqlite(file, { create: true })
     const opts: BetterAuthOptions = {
       baseURL: input.url,
       basePath: api,
@@ -152,12 +153,10 @@ export namespace ServerAuth {
     const auth = betterAuth(next.options)
     await getMigrations(auth.options).then((item) => item.runMigrations())
     await bootstrap({ auth, info, raw, legacy, url: input.url })
-    const js = await bundle({
-      directory: input.directory,
-      dirs: data.dirs,
-      file: raw?.client,
-    })
-    return { auth, info, js }
+    const entry =
+      (await customFile(input.directory, data.dirs, raw?.client, "auth-client")) ??
+      filePath("./auth-client.ts")
+    return { auth, info, entry }
   }
 
   async function bootstrap(input: {
@@ -233,10 +232,7 @@ export namespace ServerAuth {
     return typeof input === "object" && input !== null && ("options" in input || "methods" in input)
   }
 
-  async function bundle(input: { directory: string; dirs: string[]; file?: string }) {
-    const entry =
-      (await customFile(input.directory, input.dirs, input.file, "auth-client")) ??
-      filePath("./auth-client.ts")
+  async function bundle(entry: string) {
     const result = await Bun.build({
       entrypoints: [entry],
       target: "browser",
@@ -310,7 +306,8 @@ export namespace ServerAuth {
 
   export async function client(state: Promise<State>) {
     const item = await state
-    return new Response(item.js ?? "", {
+    item.js ??= item.entry ? bundle(item.entry) : Promise.resolve("")
+    return new Response(await item.js, {
       headers: {
         "content-type": "text/javascript; charset=utf-8",
         "cache-control": "no-store",
