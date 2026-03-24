@@ -3,7 +3,6 @@ import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler 
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { proxy } from "hono/proxy"
-import { basicAuth } from "hono/basic-auth"
 import z from "zod"
 import { Provider } from "../provider/provider"
 import { NamedError } from "@opencode-ai/util/error"
@@ -15,7 +14,6 @@ import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
 import { Auth } from "../auth"
-import { Flag } from "../flag/flag"
 import { Command } from "../command"
 import { Global } from "../global"
 import { WorkspaceContext } from "../control-plane/workspace-context"
@@ -43,6 +41,8 @@ import { PermissionRoutes } from "./routes/permission"
 import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
 import { lazy } from "@/util/lazy"
+import { ServerAuth } from "./auth"
+import { allowOrigin } from "./origin"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -50,10 +50,20 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 export namespace Server {
   const log = Log.create({ service: "server" })
 
-  export const Default = lazy(() => createApp({}))
+  export const Default = lazy(() =>
+    createApp({
+      directory: process.cwd(),
+      url: "http://localhost:4096",
+    }),
+  )
 
-  export const createApp = (opts: { cors?: string[] }): Hono => {
+  export const createApp = (opts: { cors?: string[]; directory?: string; url?: string }): Hono => {
     const app = new Hono()
+    const auth = ServerAuth.create({
+      directory: opts.directory ?? process.cwd(),
+      url: opts.url ?? "http://localhost:4096",
+      cors: opts.cors,
+    }).state()
     return app
       .onError((err, c) => {
         log.error("failed", {
@@ -74,15 +84,6 @@ export namespace Server {
           status: 500,
         })
       })
-      .use((c, next) => {
-        // Allow CORS preflight requests to succeed without auth.
-        // Browser clients sending Authorization headers will preflight with OPTIONS.
-        if (c.req.method === "OPTIONS") return next()
-        const password = Flag.OPENCODE_SERVER_PASSWORD
-        if (!password) return next()
-        const username = Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
-        return basicAuth({ username, password })(c, next)
-      })
       .use(async (c, next) => {
         const skipLogging = c.req.path === "/log"
         if (!skipLogging) {
@@ -102,30 +103,42 @@ export namespace Server {
       })
       .use(
         cors({
+          credentials: true,
+          exposeHeaders: ["set-auth-token"],
           origin(input) {
-            if (!input) return
-
-            if (input.startsWith("http://localhost:")) return input
-            if (input.startsWith("http://127.0.0.1:")) return input
-            if (
-              input === "tauri://localhost" ||
-              input === "http://tauri.localhost" ||
-              input === "https://tauri.localhost"
-            )
-              return input
-
-            // *.opencode.ai (https only, adjust if needed)
-            if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(input)) {
-              return input
-            }
-            if (opts?.cors?.includes(input)) {
-              return input
-            }
-
-            return
+            return allowOrigin(input, opts)
           },
         }),
       )
+      .get("/api/auth/info", async (c) => {
+        return c.json(await ServerAuth.info(auth))
+      })
+      .all("/api/auth/*", async (c) => {
+        return ServerAuth.handler(auth, c.req.raw)
+      })
+      .get("/_auth", async (c) => {
+        return ServerAuth.html(auth, c.req.raw)
+      })
+      .get("/_auth/client.js", async () => {
+        return ServerAuth.client(auth)
+      })
+      .use(async (c, next) => {
+        if (c.req.method === "OPTIONS") return next()
+        if (c.req.path === "/global/health") return next()
+        if (c.req.path.startsWith("/api/auth/")) return next()
+        if (c.req.path === "/_auth" || c.req.path === "/_auth/client.js") return next()
+        const info = await ServerAuth.info(auth)
+        if (!info.enabled) return next()
+        const session = await ServerAuth.session(auth, c.req.raw.headers)
+        if (session) return next()
+        const accept = c.req.header("accept") ?? ""
+        if (c.req.method === "GET" && accept.includes("text/html")) {
+          const url = new URL(c.req.url)
+          const redirect = url.pathname + url.search
+          return c.redirect(`${info.path}?redirect=${encodeURIComponent(redirect)}`)
+        }
+        return c.json({ message: "Authentication required", auth: info }, { status: 401 })
+      })
       .route("/global", GlobalRoutes())
       .put(
         "/auth/:providerID",
