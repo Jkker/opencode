@@ -136,6 +136,38 @@ It's very similar to Claude Code in terms of capability. Here are the key differ
 - A focus on TUI. OpenCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
 - A client/server architecture. This, for example, can allow OpenCode to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.
 
+#### How do I secure `opencode serve` or `opencode web`?
+
+OpenCode now uses Better Auth for optional server authentication. Configure it in your shared `opencode.json` file with a separate SQLite database that OpenCode manages for you.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "server": {
+    "auth": {
+      "methods": ["password"],
+      "username": "opencode",
+      "password": "change-me"
+    }
+  }
+}
+```
+
+For a zero-setup guest flow, use anonymous auth instead:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "server": {
+    "auth": {
+      "methods": ["anonymous"]
+    }
+  }
+}
+```
+
+You can mix methods like `["password", "anonymous"]`, enable passkeys with `["passkey"]`, and extend the built-in setup with project or config-directory `auth-server.ts` and `auth-client.ts` files.
+
 ---
 
 **Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)

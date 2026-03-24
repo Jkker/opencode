@@ -957,6 +957,35 @@ export namespace Config {
       ref: "KeybindsConfig",
     })
 
+  export const ServerAuth = z
+    .object({
+      methods: z
+        .array(z.enum(["password", "passkey", "anonymous"]))
+        .optional()
+        .describe("Authentication methods to enable for the server"),
+      username: z.string().optional().describe("Default username for password sign-in"),
+      email: z.string().optional().describe("Email to use for the built-in single-user password account"),
+      password: z.string().optional().describe("Password for the built-in single-user password account"),
+      secret: z.string().optional().describe("Secret used to sign Better Auth sessions"),
+      database: z.string().optional().describe("SQLite database path for Better Auth state"),
+      trustedOrigins: z.array(z.string()).optional().describe("Additional trusted origins for Better Auth"),
+      server: z.string().optional().describe("Path to a custom auth-server.ts/js module"),
+      client: z.string().optional().describe("Path to a custom auth-client.ts/js module"),
+      passkey: z
+        .object({
+          rpID: z.string().optional().describe("Passkey relying party ID"),
+          rpName: z.string().optional().describe("Passkey relying party display name"),
+          origin: z.string().optional().describe("Passkey origin"),
+        })
+        .strict()
+        .optional()
+        .describe("Passkey configuration"),
+    })
+    .strict()
+    .meta({
+      ref: "ServerAuthConfig",
+    })
+
   export const Server = z
     .object({
       port: z.number().int().positive().optional().describe("Port to listen on"),
@@ -964,6 +993,7 @@ export namespace Config {
       mdns: z.boolean().optional().describe("Enable mDNS service discovery"),
       mdnsDomain: z.string().optional().describe("Custom domain name for mDNS service (default: opencode.local)"),
       cors: z.array(z.string()).optional().describe("Additional domains to allow for CORS"),
+      auth: ServerAuth.optional().describe("Better Auth configuration for the server"),
     })
     .strict()
     .meta({

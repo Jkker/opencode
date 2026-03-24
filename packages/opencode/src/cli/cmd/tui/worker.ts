@@ -10,6 +10,7 @@ import { GlobalBus } from "@/bus/global"
 import { createOpencodeClient, type Event } from "@opencode-ai/sdk/v2"
 import { Flag } from "@/flag/flag"
 import { setTimeout as sleep } from "node:timers/promises"
+import { RemoteAuth } from "@/server/remote-auth"
 
 await Log.init({
   print: process.argv.includes("--print-logs"),
@@ -43,6 +44,8 @@ const eventStream = {
   abort: undefined as AbortController | undefined,
 }
 
+let auth: Promise<string | undefined> | undefined
+
 const startEventStream = (input: { directory: string; workspaceID?: string }) => {
   if (eventStream.abort) eventStream.abort.abort()
   const abort = new AbortController()
@@ -51,8 +54,8 @@ const startEventStream = (input: { directory: string; workspaceID?: string }) =>
 
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
-    const auth = getAuthorizationHeader()
-    if (auth) request.headers.set("Authorization", auth)
+    const token = await getAuthorizationHeader()
+    if (token) request.headers.set("Authorization", token)
     return Server.Default().fetch(request)
   }) as typeof globalThis.fetch
 
@@ -100,9 +103,9 @@ startEventStream({ directory: process.cwd() })
 export const rpc = {
   async fetch(input: { url: string; method: string; headers: Record<string, string>; body?: string }) {
     const headers = { ...input.headers }
-    const auth = getAuthorizationHeader()
-    if (auth && !headers["authorization"] && !headers["Authorization"]) {
-      headers["Authorization"] = auth
+    const token = await getAuthorizationHeader()
+    if (token && !headers["authorization"] && !headers["Authorization"]) {
+      headers["Authorization"] = token
     }
     const request = new Request(input.url, {
       method: input.method,
@@ -148,9 +151,14 @@ export const rpc = {
 
 Rpc.listen(rpc)
 
-function getAuthorizationHeader(): string | undefined {
-  const password = Flag.OPENCODE_SERVER_PASSWORD
-  if (!password) return undefined
-  const username = Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
-  return `Basic ${btoa(`${username}:${password}`)}`
+async function getAuthorizationHeader() {
+  auth ??= RemoteAuth.token({
+    url: "http://opencode.internal",
+    fetch: async (input, init) => Server.Default().fetch(new Request(input, init)),
+    username: Flag.OPENCODE_SERVER_USERNAME ?? "opencode",
+    password: Flag.OPENCODE_SERVER_PASSWORD,
+  })
+    .then((token) => (token ? `Bearer ${token}` : undefined))
+    .catch(() => undefined)
+  return auth
 }

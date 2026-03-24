@@ -27,6 +27,7 @@ import { SkillTool } from "../../tool/skill"
 import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "../../util/locale"
+import { RemoteAuth } from "../../server/remote-auth"
 
 type ToolProps<T extends Tool.Info> = {
   input: Tool.InferParameters<T>
@@ -653,13 +654,12 @@ export const RunCommand = cmd({
     }
 
     if (args.attach) {
-      const headers = (() => {
-        const password = args.password ?? process.env.OPENCODE_SERVER_PASSWORD
-        if (!password) return undefined
-        const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
-        const auth = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
-        return { Authorization: auth }
-      })()
+      const token = await RemoteAuth.token({
+        url: args.attach,
+        username: process.env.OPENCODE_SERVER_USERNAME ?? "opencode",
+        password: args.password ?? process.env.OPENCODE_SERVER_PASSWORD,
+      })
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
       const sdk = createOpencodeClient({ baseUrl: args.attach, directory, headers })
       return await execute(sdk)
     }

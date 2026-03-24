@@ -14,6 +14,7 @@ import { gitlabAuthPlugin as GitlabAuthPlugin } from "opencode-gitlab-auth"
 import { Effect, Layer, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRunPromise } from "@/effect/run-service"
+import { RemoteAuth } from "@/server/remote-auth"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
@@ -57,14 +58,16 @@ export namespace Plugin {
           const hooks: Hooks[] = []
 
           yield* Effect.promise(async () => {
+            const headers = await RemoteAuth.token({
+              url: "http://localhost:4096",
+              fetch: async (input, init) => Server.Default().fetch(new Request(input, init)),
+              username: Flag.OPENCODE_SERVER_USERNAME ?? "opencode",
+              password: Flag.OPENCODE_SERVER_PASSWORD,
+            }).then((token) => (token ? { Authorization: `Bearer ${token}` } : undefined))
             const client = createOpencodeClient({
               baseUrl: "http://localhost:4096",
               directory: ctx.directory,
-              headers: Flag.OPENCODE_SERVER_PASSWORD
-                ? {
-                    Authorization: `Basic ${Buffer.from(`${Flag.OPENCODE_SERVER_USERNAME ?? "opencode"}:${Flag.OPENCODE_SERVER_PASSWORD}`).toString("base64")}`,
-                  }
-                : undefined,
+              headers,
               fetch: async (...args) => Server.Default().fetch(...args),
             })
             const cfg = await Config.get()

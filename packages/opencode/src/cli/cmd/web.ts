@@ -5,6 +5,8 @@ import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "../../flag/flag"
 import open from "open"
 import { networkInterfaces } from "os"
+import { Instance } from "../../project/instance"
+import { Config } from "../../config/config"
 
 function getNetworkIPs() {
   const nets = networkInterfaces()
@@ -33,8 +35,14 @@ export const WebCommand = cmd({
   builder: (yargs) => withNetworkOptions(yargs),
   describe: "start opencode server and open web interface",
   handler: async (args) => {
-    if (!Flag.OPENCODE_SERVER_PASSWORD) {
-      UI.println(UI.Style.TEXT_WARNING_BOLD + "!  " + "OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
+    const auth = await Instance.provide({
+      directory: process.cwd(),
+      fn: async () => (await Config.get()).server?.auth,
+    }).catch(() => undefined)
+    if (!Flag.OPENCODE_SERVER_PASSWORD && !auth?.methods?.length && !auth?.password) {
+      UI.println(
+        UI.Style.TEXT_WARNING_BOLD + "!  " + "No server auth is configured; set server.auth in opencode.json to secure this server.",
+      )
     }
     const opts = await resolveNetworkOptions(args)
     const server = Server.listen(opts)

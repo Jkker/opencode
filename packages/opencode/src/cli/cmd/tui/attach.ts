@@ -5,6 +5,7 @@ import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
 import { existsSync } from "fs"
+import { RemoteAuth } from "@/server/remote-auth"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -60,12 +61,17 @@ export const AttachCommand = cmd({
           return args.dir
         }
       })()
-      const headers = (() => {
-        const password = args.password ?? process.env.OPENCODE_SERVER_PASSWORD
-        if (!password) return undefined
-        const auth = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-        return { Authorization: auth }
-      })()
+      const token = await RemoteAuth.token({
+        url: args.url,
+        username: process.env.OPENCODE_SERVER_USERNAME ?? "opencode",
+        password: args.password ?? process.env.OPENCODE_SERVER_PASSWORD,
+      }).catch((error) => {
+        UI.error(error instanceof Error ? error.message : String(error))
+        process.exitCode = 1
+        return undefined
+      })
+      if (process.exitCode) return
+      const headers = token ? { Authorization: `Bearer ${token}` } : undefined
       const config = await Instance.provide({
         directory: directory && existsSync(directory) ? directory : process.cwd(),
         fn: () => TuiConfig.get(),
