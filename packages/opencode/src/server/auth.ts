@@ -89,14 +89,14 @@ export namespace ServerAuth {
       username: raw?.username ?? legacy?.username ?? "opencode",
     }
     if (!info.enabled) return { info }
-    const secret = raw?.secret ?? (await storedSecret())
-    const file = authPath(raw?.database)
+    const key = raw?.secret ?? (await secret())
+    const file = auth(raw?.database)
     await fs.mkdir(path.dirname(file), { recursive: true })
     const db = new Sqlite(file, { create: true })
     const opts: BetterAuthOptions = {
       baseURL: input.url,
       basePath: api,
-      secret,
+      secret: key,
       database: db,
       trustedOrigins(request) {
         if (!request) return raw?.trustedOrigins ?? []
@@ -139,7 +139,7 @@ export namespace ServerAuth {
           : []),
       ],
     }
-    const next = await patchServer({
+    const next = await patch({
       directory: input.directory,
       dirs: data.dirs,
       file: raw?.server,
@@ -154,8 +154,8 @@ export namespace ServerAuth {
     await getMigrations(auth.options).then((item) => item.runMigrations())
     await bootstrap({ auth, info, raw, legacy, url: input.url })
     const entry =
-      (await customFile(input.directory, data.dirs, raw?.client, "auth-client")) ??
-      filePath("./auth-client.ts")
+      (await locate(input.directory, data.dirs, raw?.client, "auth-client")) ??
+      resolve("./auth-client.ts")
     return { auth, info, entry }
   }
 
@@ -197,7 +197,7 @@ export namespace ServerAuth {
     throw new Error(text || "Failed to bootstrap auth user")
   }
 
-  async function patchServer(input: {
+  async function patch(input: {
     directory: string
     dirs: string[]
     file?: string
@@ -205,7 +205,7 @@ export namespace ServerAuth {
     methods: Method[]
     options: BetterAuthOptions
   }): Promise<ServerPatch> {
-    const ref = await customFile(input.directory, input.dirs, input.file, "auth-server")
+    const ref = await locate(input.directory, input.dirs, input.file, "auth-server")
     if (!ref) return { methods: input.methods, options: input.options }
     const mod = (await import(pathToFileURL(ref).href)) as ServerModule
     if (!mod.default) return { methods: input.methods, options: input.options }
@@ -219,7 +219,7 @@ export namespace ServerAuth {
     if (isPatch(next)) {
       return {
         options: next.options ?? input.options,
-        methods: (next.methods ?? input.methods).filter((item, idx, all) => methods.includes(item) && all.indexOf(item) === idx),
+        methods: (next.methods ?? input.methods).filter((item, i, all) => methods.includes(item) && all.indexOf(item) === i),
       }
     }
     return {
@@ -247,13 +247,13 @@ export namespace ServerAuth {
     return await out.text()
   }
 
-  function authPath(file?: string) {
+  function auth(file?: string) {
     if (!file) return path.join(Global.Path.data, "opencode-auth.db")
     if (path.isAbsolute(file)) return file
     return path.join(Global.Path.data, file)
   }
 
-  async function storedSecret() {
+  async function secret() {
     const file = path.join(Global.Path.data, "opencode-auth.secret")
     const found = existsSync(file) ? await fs.readFile(file, "utf8").catch(() => "") : ""
     if (found.trim()) return found.trim()
@@ -262,7 +262,7 @@ export namespace ServerAuth {
     return next
   }
 
-  async function customFile(directory: string, dirs: string[], file: string | undefined, name: string) {
+  async function locate(directory: string, dirs: string[], file: string | undefined, name: string) {
     if (file) {
       if (path.isAbsolute(file) && existsSync(file)) return file
       const hit = [directory, ...dirs]
@@ -279,7 +279,7 @@ export namespace ServerAuth {
     return
   }
 
-  function filePath(file: string) {
+  function resolve(file: string) {
     return fileURLToPath(new URL(file, import.meta.url))
   }
 

@@ -1,5 +1,5 @@
 export namespace RemoteAuth {
-  export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  export type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
   export type Info = {
     enabled: boolean
@@ -9,7 +9,7 @@ export namespace RemoteAuth {
     username: string
   }
 
-  export async function info(input: { url: string; fetch?: Fetcher }) {
+  export async function info(input: { url: string; fetch?: Fetch }) {
     const fetcher = input.fetch ?? globalThis.fetch
     const res = await fetcher(new URL("/api/auth/info", input.url), {
       headers: {
@@ -22,7 +22,7 @@ export namespace RemoteAuth {
 
   export async function token(input: {
     url: string
-    fetch?: Fetcher
+    fetch?: Fetch
     username?: string
     password?: string
   }) {
